@@ -1148,7 +1148,7 @@ fi
 
 echo "Starting services now!"
 if [[ "${START_MODE}" != "kubeletonly" ]]; then
-  start_etcd
+  #start_etcd
   set_service_accounts
   start_apiserver
   start_controller_manager

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package etcd3
+package kubebrain
 
 import (
 	"context"
@@ -26,15 +26,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kubewharf/kubebrain-client/client"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/storage"
-	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/storage/value"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"k8s.io/klog/v2"
 )
 
@@ -69,7 +68,7 @@ func TestOnlySetFatalOnDecodeError(b bool) {
 }
 
 type watcher struct {
-	client      *clientv3.Client
+	client      client.Client
 	codec       runtime.Codec
 	newFunc     func() runtime.Object
 	objectType  string
@@ -79,11 +78,17 @@ type watcher struct {
 
 // watchChan implements watch.Interface.
 type watchChan struct {
-	watcher           *watcher
-	key               string
-	initialRev        int64
-	recursive         bool
-	progressNotify    bool
+	watcher        *watcher
+	key            string
+	initialRev     int64
+	recursive      bool
+	progressNotify bool
+	// 目前wc.internalPred的赋值始终是"k8s.io/apiserver/pkg/storage"的Everything
+	// 见staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher.go 149L
+	// 以及staging/src/k8s.io/apiserver/pkg/storage/cacher/cacher.go 1118L
+	// kubebrain的Event只有curKeyValues
+	// etcd中如果internalPred不是Everything，则需要处理preKeyValue
+	// 在kubebrain storage暂时忽略
 	internalPred      storage.SelectionPredicate
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -92,7 +97,7 @@ type watchChan struct {
 	errChan           chan error
 }
 
-func newWatcher(client *clientv3.Client, codec runtime.Codec, newFunc func() runtime.Object, versioner storage.Versioner, transformer value.Transformer) *watcher {
+func newWatcher(client client.Client, codec runtime.Codec, newFunc func() runtime.Object, versioner storage.Versioner, transformer value.Transformer) *watcher {
 	res := &watcher{
 		client:      client,
 		codec:       codec,
@@ -149,14 +154,8 @@ func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, re
 		wc.internalPred = storage.Everything
 	}
 
-	// The etcd server waits until it cannot find a leader for 3 election
-	// timeouts to cancel existing streams. 3 is currently a hard coded
-	// constant. The election timeout defaults to 1000ms. If the cluster is
-	// healthy, when the leader is stopped, the leadership transfer should be
-	// smooth. (leader transfers its leadership before stopping). If leader is
-	// hard killed, other servers will take an election timeout to realize
-	// leader lost and start campaign.
-	wc.ctx, wc.cancel = context.WithCancel(clientv3.WithRequireLeader(ctx))
+	// todo: kubebrain不支持类似lientv3.WithRequireLeader(ctx)
+	wc.ctx, wc.cancel = context.WithCancel(ctx)
 	return wc
 }
 
@@ -206,17 +205,25 @@ func (wc *watchChan) ResultChan() <-chan watch.Event {
 // The revision to watch will be set to the revision in response.
 // All events sent will have isCreated=true
 func (wc *watchChan) sync() error {
-	opts := []clientv3.OpOption{}
 	if wc.recursive {
-		opts = append(opts, clientv3.WithPrefix())
-	}
-	getResp, err := wc.watcher.client.Get(wc.ctx, wc.key, opts...)
-	if err != nil {
-		return err
-	}
-	wc.initialRev = getResp.Header.Revision
-	for _, kv := range getResp.Kvs {
-		wc.sendEvent(parseKV(kv))
+		// range
+		resp, err := wc.watcher.client.Range(wc.ctx, wc.key, prefixEnd(wc.key))
+		if err != nil {
+			return err
+		}
+		wc.initialRev = int64(resp.Header.Revision)
+		for _, kv := range resp.Kvs {
+			wc.sendEvent(parseKV(kv))
+		}
+	} else {
+		// get
+		resp, err := wc.watcher.client.Get(wc.ctx, wc.key)
+		if err != nil {
+			return err
+		}
+		wc.initialRev = int64(resp.Header.Revision)
+		wc.sendEvent(parseKV(resp.Kv))
+
 	}
 	return nil
 }
@@ -241,13 +248,17 @@ func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
 			return
 		}
 	}
-	opts := []clientv3.OpOption{clientv3.WithRev(wc.initialRev + 1), clientv3.WithPrevKV()}
+	opts := []client.WatchOption{client.WithRevision(uint64(wc.initialRev + 1))}
 	if wc.recursive {
-		opts = append(opts, clientv3.WithPrefix())
+		opts = append(opts, client.WithPrefix())
 	}
-	if wc.progressNotify {
-		opts = append(opts, clientv3.WithProgressNotify())
-	}
+	// todo: kubebarin当前没开源bookmark实现
+	/*
+		if wc.progressNotify {
+			opts = append(opts, client.WithBookmark())
+		}
+	*/
+
 	wch := wc.watcher.client.Watch(wc.ctx, wc.key, opts...)
 	for wres := range wch {
 		if wres.Err() != nil {
@@ -257,11 +268,14 @@ func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
 			wc.sendError(err)
 			return
 		}
-		if wres.IsProgressNotify() {
-			wc.sendEvent(progressNotifyEvent(wres.Header.GetRevision()))
-			metrics.RecordEtcdBookmark(wc.watcher.objectType)
-			continue
-		}
+
+		// todo: kubebarin当前没开源bookmark实现
+		/*
+			if wres.IsBookmark() {
+				wc.sendEvent(progressNotifyEvent(int64(wres.Header.Revision)))
+				continue
+			}
+		*/
 
 		for _, e := range wres.Events {
 			parsedEvent, err := parseEvent(e)
@@ -322,7 +336,7 @@ func (wc *watchChan) acceptAll() bool {
 
 // transform transforms an event into a result for user if not filtered.
 func (wc *watchChan) transform(e *event) (res *watch.Event) {
-	curObj, oldObj, err := wc.prepareObjs(e)
+	curObj, err := wc.prepareObjs(e)
 	if err != nil {
 		klog.Errorf("failed to prepare current and previous objects: %v", err)
 		wc.sendError(err)
@@ -344,12 +358,12 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 			Object: object,
 		}
 	case e.isDeleted:
-		if !wc.filter(oldObj) {
+		if !wc.filter(curObj) {
 			return nil
 		}
 		res = &watch.Event{
 			Type:   watch.Deleted,
-			Object: oldObj,
+			Object: curObj,
 		}
 	case e.isCreated:
 		if !wc.filter(curObj) {
@@ -360,37 +374,12 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 			Object: curObj,
 		}
 	default:
-		if wc.acceptAll() {
-			res = &watch.Event{
-				Type:   watch.Modified,
-				Object: curObj,
-			}
-			return res
+		// todo： 根据preKV判断Event类型
+		res = &watch.Event{
+			Type:   watch.Modified,
+			Object: curObj,
 		}
-		if oldObj != nil {
-			klog.InfoS("maao: watcher: oldObj", "event", oldObj)
-		} else {
-			klog.InfoS("maao: watcher: curObj", "event", curObj)
-		}
-		curObjPasses := wc.filter(curObj)
-		oldObjPasses := wc.filter(oldObj)
-		switch {
-		case curObjPasses && oldObjPasses:
-			res = &watch.Event{
-				Type:   watch.Modified,
-				Object: curObj,
-			}
-		case curObjPasses && !oldObjPasses:
-			res = &watch.Event{
-				Type:   watch.Added,
-				Object: curObj,
-			}
-		case !curObjPasses && oldObjPasses:
-			res = &watch.Event{
-				Type:   watch.Deleted,
-				Object: oldObj,
-			}
-		}
+		return res
 	}
 	return res
 }
@@ -424,40 +413,23 @@ func (wc *watchChan) sendEvent(e *event) {
 	}
 }
 
-func (wc *watchChan) prepareObjs(e *event) (curObj runtime.Object, oldObj runtime.Object, err error) {
+func (wc *watchChan) prepareObjs(e *event) (curObj runtime.Object, err error) {
 	if e.isProgressNotify {
 		// progressNotify events doesn't contain neither current nor previous object version,
-		return nil, nil, nil
+		return nil, nil
 	}
 
-	if !e.isDeleted {
-		data, _, err := wc.watcher.transformer.TransformFromStorage(wc.ctx, e.value, authenticatedDataString(e.key))
-		if err != nil {
-			return nil, nil, err
-		}
-		curObj, err = decodeObj(wc.watcher.codec, wc.watcher.versioner, data, e.rev)
-		if err != nil {
-			return nil, nil, err
-		}
+	// 与etcd不同，这里无论是delete还是其他操作，都是返回curObj
+	// todo: deletion的时候返回preObject
+	data, _, err := wc.watcher.transformer.TransformFromStorage(wc.ctx, e.value, authenticatedDataString(e.key))
+	if err != nil {
+		return nil, err
 	}
-	// We need to decode prevValue, only if this is deletion event or
-	// the underlying filter doesn't accept all objects (otherwise we
-	// know that the filter for previous object will return true and
-	// we need the object only to compute whether it was filtered out
-	// before).
-	if len(e.prevValue) > 0 && (e.isDeleted || !wc.acceptAll()) {
-		data, _, err := wc.watcher.transformer.TransformFromStorage(wc.ctx, e.prevValue, authenticatedDataString(e.key))
-		if err != nil {
-			return nil, nil, err
-		}
-		// Note that this sends the *old* object with the etcd revision for the time at
-		// which it gets deleted.
-		oldObj, err = decodeObj(wc.watcher.codec, wc.watcher.versioner, data, e.rev)
-		if err != nil {
-			return nil, nil, err
-		}
+	curObj, err = decodeObj(wc.watcher.codec, wc.watcher.versioner, data, e.rev)
+	if err != nil {
+		return nil, err
 	}
-	return curObj, oldObj, nil
+	return curObj, nil
 }
 
 func decodeObj(codec runtime.Codec, versioner storage.Versioner, data []byte, rev int64) (_ runtime.Object, err error) {

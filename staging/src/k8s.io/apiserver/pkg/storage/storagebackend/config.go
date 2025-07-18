@@ -30,9 +30,10 @@ import (
 )
 
 const (
-	StorageTypeUnset = ""
-	StorageTypeETCD2 = "etcd2"
-	StorageTypeETCD3 = "etcd3"
+	StorageTypeUnset     = ""
+	StorageTypeETCD2     = "etcd2"
+	StorageTypeETCD3     = "etcd3"
+	StorageTypeKubeBrain = "kubebrain"
 
 	DefaultCompactInterval      = 5 * time.Minute
 	DefaultDBMetricPollInterval = 30 * time.Second

@@ -34,6 +34,8 @@ func Create(c storagebackend.ConfigForResource, newFunc func() runtime.Object) (
 		return nil, nil, fmt.Errorf("%s is no longer a supported storage backend", c.Type)
 	case storagebackend.StorageTypeUnset, storagebackend.StorageTypeETCD3:
 		return newETCD3Storage(c, newFunc)
+	case storagebackend.StorageTypeKubeBrain:
+		return newKubebrainStorage(c, newFunc)
 	default:
 		return nil, nil, fmt.Errorf("unknown storage type: %s", c.Type)
 	}
@@ -46,6 +48,8 @@ func CreateHealthCheck(c storagebackend.Config, stopCh <-chan struct{}) (func() 
 		return nil, fmt.Errorf("%s is no longer a supported storage backend", c.Type)
 	case storagebackend.StorageTypeUnset, storagebackend.StorageTypeETCD3:
 		return newETCD3HealthCheck(c, stopCh)
+	case storagebackend.StorageTypeKubeBrain:
+		return newKubebrainHealthCheck(c, stopCh)
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", c.Type)
 	}
@@ -57,6 +61,8 @@ func CreateReadyCheck(c storagebackend.Config, stopCh <-chan struct{}) (func() e
 		return nil, fmt.Errorf("%s is no longer a supported storage backend", c.Type)
 	case storagebackend.StorageTypeUnset, storagebackend.StorageTypeETCD3:
 		return newETCD3ReadyCheck(c, stopCh)
+	case storagebackend.StorageTypeKubeBrain:
+		return newKubebrainReadyCheck(c, stopCh)
 	default:
 		return nil, fmt.Errorf("unknown storage type: %s", c.Type)
 	}
