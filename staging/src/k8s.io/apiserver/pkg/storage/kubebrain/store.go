@@ -325,7 +325,7 @@ func (s *store) GuaranteedUpdate(
 		if err != nil {
 			return nil, err
 		}
-		return s.getState(ctx, resp.Kv, key, v, false)
+		return s.getState(ctx, resp.Kv, key, v, ignoreNotFound)
 	}
 
 	var origState *objState

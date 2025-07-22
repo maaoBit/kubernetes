@@ -427,7 +427,7 @@ replace (
 	github.com/kr/fs => github.com/kr/fs v0.1.0
 	github.com/kr/pretty => github.com/kr/pretty v0.2.1
 	github.com/kr/text => github.com/kr/text v0.2.0
-	github.com/kubewharf/kubebrain-client => /Users/maao/工作/go_workspace/src/github.com/maaoBit/client
+	github.com/kubewharf/kubebrain-client => github.com/maaoBit/client v1.0.1
 	github.com/libopenstorage/openstorage => github.com/libopenstorage/openstorage v1.0.0
 	github.com/liggitt/tabwriter => github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de
 	github.com/lithammer/dedent => github.com/lithammer/dedent v1.1.0

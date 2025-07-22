@@ -200,6 +200,8 @@ done
 
 if [ "x${GO_OUT}" == "x" ]; then
     make -C "${KUBE_ROOT}" WHAT="cmd/kubectl cmd/kube-apiserver cmd/kube-controller-manager cmd/cloud-controller-manager cmd/kubelet cmd/kube-proxy cmd/kube-scheduler"
+    # only use in macOS
+    codesign --sign - --force --preserve-metadata=entitlements,requirements,flags,runtime  /Users/maao/工作/go_workspace/src/k8s.io/kubernetes/_output/local/bin/darwin/arm64/kubectl
 else
     echo "skipped the build."
 fi
@@ -1124,9 +1126,9 @@ if [[ "${KUBETEST_IN_DOCKER:-}" == "true" ]]; then
 fi
 
 # validate that etcd is: not running, in path, and has minimum required version.
-if [[ "${START_MODE}" != "kubeletonly" ]]; then
-  kube::etcd::validate
-fi
+#if [[ "${START_MODE}" != "kubeletonly" ]]; then
+#  kube::etcd::validate
+#fi
 
 if [[ "${START_MODE}" != "kubeletonly" ]]; then
   test_apiserver_off

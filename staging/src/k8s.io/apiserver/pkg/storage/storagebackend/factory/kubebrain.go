@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/grpc/status"
-
 	"github.com/kubewharf/kubebrain-client/client"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -19,7 +17,6 @@ import (
 	"k8s.io/apiserver/pkg/storage/kubebrain"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/value"
-	"k8s.io/klog/v2"
 )
 
 // TLSConfig holds kubebrain client TLS配置
@@ -193,11 +190,6 @@ func newKubebrainCheck(c storagebackend.Config, timeout time.Duration, stopCh <-
 		_, err := kbClient.Get(ctx, path.Join("/", c.Prefix, "health"))
 		if err == nil {
 			return nil
-		}
-		st, ok := status.FromError(err)
-		if ok {
-			klog.Errorf("gRPC code: %w", st.Code())
-			klog.Errorf("gRPC message: %w", st.Message())
 		}
 		return fmt.Errorf("error getting data from kubebrain: %w", err)
 	}, nil
